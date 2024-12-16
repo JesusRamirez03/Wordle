@@ -44,14 +44,15 @@ class SendGameSummaryJob implements ShouldQueue
      */
     protected function generateSummary()
     {
-        $guessedWords = json_decode($this->game->guessed_words, true);
+        $guessedLetters = json_decode($this->game->guessed_letters, true);
 
         return [
             'Juego' => $this->game->name,
             'Usuario' => $this->game->user->name,
+            'Palabra' => $this->game->word, 
             'Longitud de la palabra' => strlen($this->game->word),
-            'Intentos usados' => count($guessedWords),
-            'Palabras intentadas' => array_column($guessedWords, 'guess'),
+            'Intentos usados' => count($guessedLetters),
+            'Letras intentadas' => implode(', ', $guessedLetters), 
             'Estado' => ucfirst($this->game->status),
         ];
     }

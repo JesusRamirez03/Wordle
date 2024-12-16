@@ -18,7 +18,7 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
             $table->string('name');
             $table->string('word'); 
-            $table->text('guessed_words')->default('[]'); 
+            $table->json('guessed_letters')->default(json_encode([])); 
             $table->integer('remaining_attempts')->default(5);  
             $table->enum('status', ['playing', 'won', 'lost'])->default('playing'); 
             $table->timestamps();
