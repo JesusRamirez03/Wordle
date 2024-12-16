@@ -44,20 +44,22 @@ class GameController extends Controller
     
     
 
-    public function guess(Request $request, $id)
+    public function guess(Request $request, $gameId, $guess)
     {
-        $validated = $request->validate([
-            'guess' => 'required|string',
-        ]);
+        // Verificar si el parámetro guess está presente
+        if (empty($guess)) {
+            return response()->json(['message' => 'La palabra adivinada es obligatoria.'], 400);
+        }
     
         $user = auth()->user();
-    
+        
         // Verificar si la cuenta está activa
         if (!$user->is_active) {
             return response()->json(['message' => 'No puedes jugar porque tu cuenta está desactivada.'], 403);
         }
-    
-        $game = Game::findOrFail($id);
+        
+        // Buscar el juego con el gameId proporcionado
+        $game = Game::findOrFail($gameId);
     
         if ($game->user_id !== $user->id) {
             return response()->json(['message' => 'No tienes permiso para participar en esta partida.'], 403);
@@ -66,8 +68,6 @@ class GameController extends Controller
         if ($game->status !== 'playing') {
             return response()->json(['message' => 'El juego ya ha terminado.'], 400);
         }
-    
-        $guess = $validated['guess'];
     
         // Verificar si la palabra ya fue ingresada
         $guessedWords = json_decode($game->guessed_words, true) ?? [];
@@ -109,7 +109,7 @@ class GameController extends Controller
     
             SendGameSummaryJob::dispatch($game)->delay(now()->addMinute());
     
-            $this->sendWhatsAppMessage($user->phone, '¡Felicidades! Has ganado la partida.');
+            $this->sendTwilioMessage($user->phone, '¡Felicidades! Has ganado la partida.');
         } elseif ($game->remaining_attempts === 0) {
             $game->status = 'lost';
     
