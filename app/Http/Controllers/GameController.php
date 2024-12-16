@@ -8,205 +8,270 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Env;
 use Twilio\Rest\Client;
+use App\Jobs\SendGameSummaryJob;
+
 
 class GameController extends Controller
 {
     public function createGame(Request $request)
     {
-        // Verificar que el usuario esté autenticado
-        $user = Auth::user();
-        
+        $user = auth()->user();
+    
+        // Verificar si la cuenta está activa
         if (!$user->is_active) {
-            return response()->json(['message' => 'Tu cuenta está desactivada y no puedes crear una partida.'], 403);
+            return response()->json(['message' => 'No puedes crear un juego porque tu cuenta está desactivada.'], 403);
         }
     
-        // Verificar si el usuario ya tiene una partida activa
-        $existingGame = Game::where('user_id', $user->id)
-                            ->where('status', 'playing')
-                            ->first();
+        $word = $this->getRandomWord(); 
     
-        if ($existingGame) {
-            return response()->json(['message' => 'Ya tienes una partida activa.'], 400);
-        }
-    
-        // Obtener una palabra aleatoria
-        $word = $this->getRandomWord(); // Método para obtener la palabra aleatoria
-    
-        // Crear la partida
-        try {
-            $game = Game::create([
-                'user_id' => $user->id, // Asignamos el ID del usuario autenticado
-                'word' => $word, // Asignamos la palabra aleatoria
-                'guessed_words' => '[]', // Inicializamos el campo guessed_words como un arreglo vacío
-                'remaining_attempts' => env('MAX_ATTEMPTS', 5), // El número de intentos en Wordle es típicamente 6
-                'status' => 'playing', // El estado de la partida comienza como 'playing'
-            ]);
-    
-            return response()->json([
-                'message' => 'Partida creada exitosamente.',
-                'game' => $game,
-            ], 201);
-        } catch (\Exception $e) {
-            // Capturamos cualquier error y devolvemos una respuesta de error
-            return response()->json(['message' => 'Error al crear la partida.', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    
-
-    public function guess(Request $request, $gameId)
-    {
-        $user = Auth::user();
-        
-        $request->validate([
-            'guess' => 'required|string|min:5|max:5', // La palabra debe tener exactamente 5 letras
+        $game = Game::create([
+            'user_id' => $user->id,
+            'name' => "Juego de {$user->name}",
+            'word' => $word,
+            'remaining_attempts' => env('MAX_ATTEMPTS', 5), 
         ]);
-        
-        $game = Game::findOrFail($gameId);
-        
-        // Verificar si el jugador está participando en este juego
+    
+        return response()->json([
+            'game' => [
+                'id' => $game->id,
+                'user_id' => $game->user_id,
+                'name' => $game->name,
+                'length' => strlen($word), 
+                'remaining_attempts' => $game->remaining_attempts,
+            ]
+        ], 201);
+    }
+    
+    
+
+    public function guess(Request $request, $id)
+    {
+        $validated = $request->validate([
+            'guess' => 'required|string',
+        ]);
+    
+        $user = auth()->user();
+    
+        // Verificar si la cuenta está activa
+        if (!$user->is_active) {
+            return response()->json(['message' => 'No puedes jugar porque tu cuenta está desactivada.'], 403);
+        }
+    
+        $game = Game::findOrFail($id);
+    
         if ($game->user_id !== $user->id) {
-            return response()->json(['message' => 'No tienes acceso a esta partida.'], 403);
+            return response()->json(['message' => 'No tienes permiso para participar en esta partida.'], 403);
         }
     
-        // Verificar que los intentos restantes sean mayores a 0
-        if ($game->remaining_attempts <= 0) {
-            return response()->json(['message' => 'Ya no tienes intentos restantes.'], 400);
+        if ($game->status !== 'playing') {
+            return response()->json(['message' => 'El juego ya ha terminado.'], 400);
         }
     
-        // Obtener la palabra adivinada
-        $guess = strtolower($request->guess); // Convertir la palabra a minúsculas
+        $guess = $validated['guess'];
     
-        // Verificar si la palabra adivinada es correcta
+        // Verificar si la palabra ya fue ingresada
+        $guessedWords = json_decode($game->guessed_words, true) ?? [];
+        if (in_array($guess, array_column($guessedWords, 'guess'))) {
+            return response()->json([
+                'message' => 'Ya intentaste esta palabra. Intenta con una diferente.',
+            ], 400);
+        }
+    
+        if (strlen($guess) !== strlen($game->word)) {
+            return response()->json([
+                'message' => 'La longitud de la palabra ingresada no coincide con la palabra a adivinar.',
+            ], 400);
+        }
+    
+        $feedback = [];
+        $wordArray = str_split($game->word);
+        $guessArray = str_split($guess);
+    
+        foreach ($guessArray as $index => $letter) {
+            if ($letter === $wordArray[$index]) {
+                $feedback[] = ['letter' => $letter, 'status' => 'La letra es correcta y está en el lugar correcto.'];
+            } elseif (in_array($letter, $wordArray)) {
+                $feedback[] = ['letter' => $letter, 'status' => 'La letra está en la palabra pero en el lugar equivocado.'];
+            } else {
+                $feedback[] = ['letter' => $letter, 'status' => 'La letra no está en ningún lugar de la palabra.'];
+            }
+        }
+    
+        $game->guessed_words = json_encode(array_merge(
+            $guessedWords,
+            [['guess' => $guess]]
+        ));
+    
+        $game->remaining_attempts -= 1;
+    
         if ($guess === $game->word) {
             $game->status = 'won';
-            $this->sendTwilioMessage($user->phone, "¡Felicidades! Adivinaste la palabra correctamente: {$game->word}");
-        } else {
-            $game->remaining_attempts--;
-            $feedback = $this->getFeedback($guess, $game->word); // Obtener retroalimentación sobre el intento
     
-            $game->guessed_words = json_encode(array_merge(json_decode($game->guessed_words), [['guess' => $guess, 'feedback' => $feedback]]));
-            
-            if ($game->remaining_attempts <= 0) {
-                $game->status = 'lost';
-                $this->sendTwilioMessage($user->phone, "¡Perdiste! La palabra era: {$game->word}");
-            } else {
-                $this->sendTwilioMessage($user->phone, "Tu intento: $guess. Retroalimentación: $feedback");
-            }
+            SendGameSummaryJob::dispatch($game)->delay(now()->addMinute());
+    
+            $this->sendWhatsAppMessage($user->phone, '¡Felicidades! Has ganado la partida.');
+        } elseif ($game->remaining_attempts === 0) {
+            $game->status = 'lost';
+    
+            SendGameSummaryJob::dispatch($game)->delay(now()->addMinute());
+    
+            $this->sendTwilioMessage($user->phone, 'Lo siento, has perdido la partida. La palabra era: ' . $game->word);
+    
+            $game->save();
+    
+            return response()->json([
+                'message' => 'Lo siento, has perdido la partida. La palabra era: ' . $game->word,
+                'feedback' => $feedback,
+                'remaining_attempts' => 0,
+                'status' => 'lost',
+            ]);
         }
     
         $game->save();
     
         return response()->json([
-            'game' => $game,
+            'feedback' => $feedback,
             'remaining_attempts' => $game->remaining_attempts,
-            'guessed_words' => json_decode($game->guessed_words),
+            'status' => $game->status,
         ]);
     }
-    
-    
+        
     public function show($gameId)
     {
+        $user = auth()->user();
+        
+        if (!$user->is_active) {
+            return response()->json(['error' => 'Tu cuenta está inactiva.'], 403);
+        }
+    
         $game = Game::find($gameId);
     
         if (!$game) {
             return response()->json(['error' => 'Juego no encontrado.'], 404);
         }
     
-        if ($game->user_id !== auth()->id()) {
-            return response()->json(['error' => 'No estas autorizado para ver el juego.'], 403);
+        if ($game->status !== 'playing') {
+            return response()->json(['error' => 'Juego terminado.'], 403);
         }
     
-        $guessedLetters = explode(',', $game->guessed_letters); 
+        if ($game->user_id !== $user->id && $user->role !== 'admin') {
+            return response()->json(['error' => 'No estás autorizado para ver este juego.'], 403);
+        }
     
-        $word = $game->word;  
+        $guessedWords = !empty($game->guessed_words) ? json_decode($game->guessed_words, true) : [];
     
-        $wordDisplay = '';
-        foreach (str_split($word) as $letter) {
-            if (in_array($letter, $guessedLetters)) {
-                $wordDisplay .= $letter . ' ';
-            } else {
-                $wordDisplay .= '_ ';
-            }
+        $guessedWordsList = array_column($guessedWords, 'guess'); 
+    
+        return response()->json([
+            'game_id' => $game->id,
+            'game_name' => $game->name,
+            'word_length' => strlen($game->word),
+            'remaining_attempts' => $game->remaining_attempts, 
+            'guessed_words' => $guessedWordsList, 
+        ]);
+    }
+    
+    
+
+    public function showHistoryById($userId)
+    {
+        $user = Auth::user();  
+    
+        if (!$user->is_active) {
+            return response()->json(['error' => 'Tu cuenta está inactiva.'], 403);
+        }
+    
+        if ($user->id != $userId && $user->role != 'admin') {
+            return response()->json(['message' => 'No estás autorizado para ver el historial de este usuario.'], 403);
+        }
+    
+        $games = Game::where('user_id', $userId)->get();
+    
+        if ($games->isEmpty()) {
+            return response()->json(['message' => 'No se encontraron juegos para este usuario.'], 404);
         }
     
         return response()->json([
-            'message' => 'Detalles del juego recuperados exitosamente.',
-            'word_display' => trim($wordDisplay),  
-            'guessed_letters' => $guessedLetters, 
-            'attempts_left' => $game->remaining_attempts, 
+            'message' => 'Juegos recuperados exitosamente.',
+            'games' => $games,
         ]);
     }
-
-    public function showHistoryById($userId)
-{
-    $user = Auth::user();  
-
-    if ($user->id != $userId && !$user->is_admin) {
-        return response()->json(['message' => 'No estas autorizado para ver el historial de este usuario.'], 403);
-    }
-
-    $games = Game::where('user_id', $userId)->get();
-
-    if ($games->isEmpty()) {
-        return response()->json(['message' => 'No games found for this user.'], 404);
-    }
-
-    return response()->json([
-        'message' => 'Games retrieved successfully.',
-        'games' => $games,
-    ]);
-}
-
+    
     
     
 
     public function leaveGame($gameId)
     {
-        $user = Auth::user(); 
-
-        $game = Game::find($gameId);
-
-        if (!$game || $game->user_id !== $user->id) {
-            return response()->json(['message' => 'Game not found or you do not have access to it.'], 404);
+        $user = auth()->user();
+    
+        // Verificar si el usuario está activo
+        if (!$user->is_active) {
+            return response()->json(['error' => 'Tu cuenta está inactiva. No puedes abandonar la partida.'], 403);
         }
-
+    
+        $game = Game::find($gameId);
+    
+        if (!$game) {
+            return response()->json(['error' => 'Juego no encontrado.'], 404);
+        }
+    
+        if ($game->status !== 'playing') {
+            return response()->json(['error' => 'No se puede abandonar una partida que no está en curso.'], 400);
+        }
+    
+        if ($game->user_id !== $user->id && $user->role !== 'admin') {
+            return response()->json(['error' => 'No estás autorizado para abandonar esta partida.'], 403);
+        }
+    
         $game->status = 'lost';
         $game->save();
-
-        $user->current_game_id = null;
-        $user->save();
-
-        $this->sendTwilioMessage($user->phone, "¡Perdiste! Has abandonado la partida.");
-
+    
+        $this->sendTwilioMessage($user->phone, 'Has abandonado la partida. Has perdido.');
+    
         return response()->json([
-            'message' => 'You have left the game and lost automatically.',
-            'game' => $game,
+            'message' => 'Has abandonado la partida correctamente. El juego se ha marcado como perdido.',
+            'game_id' => $game->id,
+            'status' => $game->status,
         ]);
     }
+    
 
     private function getRandomWord()
     {
-        $words = ['gato', 'perro', 'elefante', 'jirafa', 'zebra'];
+        $words = ['perro', 'gatos', 'jirafa', 'zorro', 'raton','automovil', 'carosa', 'computador']; 
         return $words[array_rand($words)];
     }
 
     private function getFeedback($guess, $word)
-{
-    $feedback = [];
+    {
+        $feedback = [];
+        $wordLetters = str_split($word);
+        $guessLetters = str_split($guess);
+        $usedIndexes = []; 
     
-    for ($i = 0; $i < strlen($guess); $i++) {
-        if ($guess[$i] === $word[$i]) {
-            $feedback[] = 'correct'; // Letra correcta en su posición
-        } elseif (strpos($word, $guess[$i]) !== false) {
-            $feedback[] = 'misplaced'; // Letra correcta en lugar incorrecto
-        } else {
-            $feedback[] = 'incorrect'; // Letra incorrecta
+        foreach ($guessLetters as $i => $letter) {
+            if ($letter === $wordLetters[$i]) {
+                $feedback[] = ['letter' => $letter, 'status' => 'correct'];
+                $usedIndexes[] = $i; 
+            } else {
+                $feedback[] = ['letter' => $letter, 'status' => ''];
+            }
         }
+    
+        foreach ($guessLetters as $i => $letter) {
+            if ($feedback[$i]['status'] === '') {
+                $foundIndex = array_search($letter, $wordLetters);
+                if ($foundIndex !== false && !in_array($foundIndex, $usedIndexes)) {
+                    $feedback[$i]['status'] = 'misplaced';
+                    $usedIndexes[] = $foundIndex;
+                } else {
+                    $feedback[$i]['status'] = 'incorrect';
+                }
+            }
+        }
+    
+        return $feedback;
     }
-
-    return implode(',', $feedback); // Retornar la retroalimentación como una cadena
-}
 
     protected function getMaskedWord($word, $guessedLetters)
     {
@@ -252,39 +317,34 @@ class GameController extends Controller
     }
 
     public function deactivateAccount($userId)
-{
-    $user = User::findOrFail($userId);
+    {
+        $authenticatedUser = Auth::user();
+    
+        if (!$authenticatedUser->isAdmin()) {
+            return response()->json(['message' => 'No tienes permiso para realizar esta acción.'], 403);
+        }
+    
+        $user = User::find($userId);
 
-    $authenticatedUser = Auth::user();
-    if (!$authenticatedUser->isAdmin()) {
-        return response()->json(['message' => 'You do not have permission to perform this action.'], 403);
+        if (!$user) {
+            return response()->json(['message' => 'El usuario no existe.'], 404);
+        }
+    
+        if (!$user->is_active) {
+            return response()->json(['message' => 'La cuenta ya está desactivada.'], 400);
+        }
+    
+        $user->is_active = false;
+        $user->current_game_id = null; 
+        $user->save();
+    
+        return response()->json([
+            'message' => 'La cuenta ha sido desactivada exitosamente.',
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+            'status' => 'inactive'
+        ]);
     }
-
-    $user->is_active = false;
-    $user->current_game_id = null; 
-    $user->save();
-
-    return response()->json(['message' => 'Account has been deactivated successfully.']);
-}
-
-public function showAllHistory()
-{
-    $authenticatedUser = Auth::user();
-    if (!$authenticatedUser->isAdmin()) {
-        return response()->json(['message' => 'You do not have permission to view all game histories.'], 403);
-    }
-
-    $games = Game::all();
-
-    if ($games->isEmpty()) {
-        return response()->json(['message' => 'No games found.'], 404);
-    }
-
-    return response()->json([
-        'message' => 'Games retrieved successfully.',
-        'games' => $games,
-    ]);
-}
-
+    
 
 }

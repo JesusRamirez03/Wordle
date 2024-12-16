@@ -24,6 +24,7 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
         }
+        $activationCode = mt_rand(100000, 999999);
 
         $user = User::create([
             'name' => $request->name,
@@ -31,13 +32,13 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
             'phone' => $request->phone,
             'is_active' => false,  
-            'activation_code' => Str::random(6), 
+            'activation_code' => $activationCode, 
         ]);
 
         $this->sendActivationCode($user);
 
         return response()->json([
-            'message' => 'User created successfully. Check your phone for the activation code.',
+            'message' => 'Usuario creado exitosamente. Codigo de acceso enviado a su celular.',
             'user' => $user,
         ]);
     }
@@ -62,11 +63,11 @@ class AuthController extends Controller
                     'token' => $token,
                 ]);
             } else {
-                return response()->json(['error' => 'Account not activated.'], 403);
+                return response()->json(['error' => 'Cuenta no activada.'], 403);
             }
         }
 
-        return response()->json(['error' => 'Invalid credentials'], 401);
+        return response()->json(['error' => 'Credenciales invalidas'], 401);
     }
 
     public function activate(Request $request)
@@ -78,14 +79,14 @@ class AuthController extends Controller
         $user = User::where('activation_code', $request->activation_code)->first();
 
         if (!$user) {
-            return response()->json(['error' => 'Invalid activation code.'], 400);
+            return response()->json(['error' => 'Codigo de acceso invalido.'], 400);
         }
 
         $user->is_active = true;
         $user->activation_code = null; 
         $user->save();
 
-        return response()->json(['message' => 'Account activated successfully.']);
+        return response()->json(['message' => 'Cuenta activada exitosamente.']);
     }
 
 
@@ -102,7 +103,7 @@ class AuthController extends Controller
             "whatsapp:+5218711015826",
             array(
                 'from' =>'whatsapp:'.$from,
-                'body' =>'Tu codigo de acrivacion es: '.$user->activation_code,
+                'body' =>'Tu codigo de activacion es: '.$user->activation_code,
             )
         );
 

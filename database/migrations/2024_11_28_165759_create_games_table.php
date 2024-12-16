@@ -16,6 +16,7 @@ return new class extends Migration
         Schema::create('games', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
+            $table->string('name');
             $table->string('word'); 
             $table->text('guessed_words')->default('[]'); 
             $table->integer('remaining_attempts')->default(5);  

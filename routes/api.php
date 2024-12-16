@@ -21,7 +21,6 @@ use App\Http\Controllers\GameController;
 Route::post('/register', [AuthController::class, 'register']);  
 Route::post('/activate', [AuthController::class, 'activate']);  
 Route::post('/login', [AuthController::class, 'login']);
-Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/games', [GameController::class, 'createGame']);  
@@ -31,9 +30,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/games/history/{userId}',[GameController::class, 'showHistoryById']);
 
     Route::middleware('is_admin')->group(function () {
-        Route::put('/admin/deactivate/{userId}', [GameController::class, 'deactivateAccount']);
+        Route::put('/admin/desactivar/{userId}', [GameController::class, 'deactivateAccount']);
         
-        Route::get('/admin/allhistory', [GameController::class, 'showAllHistory']);
     });
 });
 
