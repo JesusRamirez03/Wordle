@@ -22,13 +22,15 @@ class GameController extends Controller
             return response()->json(['message' => 'No puedes crear un juego porque tu cuenta está desactivada.'], 403);
         }
     
-        $word = $this->getRandomWord(); 
-    
+        $word = $this->getRandomWord(); // Obtener la palabra al azar
+
         $game = Game::create([
             'user_id' => $user->id,
             'name' => "Juego de {$user->name}",
             'word' => $word,
-            'remaining_attempts' => env('MAX_ATTEMPTS', 5), 
+            'remaining_attempts' => env('MAX_ATTEMPTS', 5), // Intentos disponibles
+            'guessed_letters' => json_encode([]), // Letras adivinadas inicialmente vacías
+            'status' => 'playing', // Estado inicial
         ]);
     
         return response()->json([
@@ -36,8 +38,9 @@ class GameController extends Controller
                 'id' => $game->id,
                 'user_id' => $game->user_id,
                 'name' => $game->name,
-                'length' => strlen($word), 
+                'word_length' => strlen($word),
                 'remaining_attempts' => $game->remaining_attempts,
+                'masked_word' => $this->getMaskedWord($word, []), // Mostrar palabra oculta
             ]
         ], 201);
     }
