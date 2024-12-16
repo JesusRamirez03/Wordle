@@ -26,7 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/games', [GameController::class, 'createGame']);  
     Route::post('/games/{gameId}/leave', [GameController::class, 'leaveGame']);  
     Route::get('/games/{gameId}', [GameController::class, 'show']);  
-    Route::post('/games/{gameId}/guess', [GameController::class, 'guess']);
+    Route::post('/games/{gameId}/guess/{guess}', [GameController::class, 'guess']);
     Route::get('/games/history/{userId}',[GameController::class, 'showHistoryById']);
 
     Route::middleware('is_admin')->group(function () {
